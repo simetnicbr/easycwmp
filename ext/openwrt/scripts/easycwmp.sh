@@ -21,6 +21,7 @@ UCI_REVERT="/sbin/uci -q ${UCI_CONFIG_DIR:+-c $UCI_CONFIG_DIR} revert"
 UCI_CHANGES="/sbin/uci -q ${UCI_CONFIG_DIR:+-c $UCI_CONFIG_DIR} changes"
 UCI_BATCH="/sbin/uci -q ${UCI_CONFIG_DIR:+-c $UCI_CONFIG_DIR} batch"
 
+# Don't move DOWNLOAD_DIR outside of /tmp
 DOWNLOAD_DIR="/tmp/easycwmp_download"
 EASYCWMP_PROMPT="easycwmp>"
 set_fault_tmp_file="/tmp/.easycwmp_set_fault_tmp"
@@ -279,21 +280,23 @@ handle_action() {
 	fi
 	
 	if [ "$action" = "download" ]; then
-# TODO: check firmaware size with falsh to be improved  
-		dl_size=`df  |grep  "/tmp$" | awk '{print $4;}'`
-		[ -n "$dl_size" ] && dl_size_byte=$((${dl_size}*1024))
-		if [ -n "$dl_size" -a "$dl_size_byte" -lt "$__arg3" ]; then
+		# Download must still leave 10% of /tmp free
+		df_space=$(df /tmp | awk 'END { printf "%i", $4 * 1024 * 0.9 }')
+		if [ -n "$df_space" ] && [ "$df_space" -lt "$__arg3" ]; then
 			let fault_code=9000+$E_DOWNLOAD_FAILURE
 			common_json_output_fault "" "$fault_code"
 		else 
-			rm -rf $DOWNLOAD_DIR 2> /dev/null
-			mkdir -p $DOWNLOAD_DIR
+			rm -rf "$DOWNLOAD_DIR" 2> /dev/null
+			mkdir -p "$DOWNLOAD_DIR"
 			local dw_url="$__arg1"
-			[ "$__arg4" != "" -o "$__arg5" != "" ] && dw_url=`echo "$__arg1" | sed -e "s@://@://$__arg4:$__arg5\@@g"`
-			wget -P $DOWNLOAD_DIR "$dw_url"
-			fault_code="$?"
-			if [ "$fault_code" != "0" ]; then
-				rm -rf $DOWNLOAD_DIR 2> /dev/null
+			if [ -n "$__arg4" ] || [ -n "$__arg5" ] ; then
+				dw_url=$(echo "$__arg1" | sed -e "s@://@://$__arg4:$__arg5\@@g")
+			fi
+			wget -P "$DOWNLOAD_DIR" "$dw_url"
+			fault_code=$?
+			dl_size_total=$(wc -c "$DOWNLOAD_DIR"/* 2>/dev/null | awk 'END { print $1; }')
+			if [ $fault_code -ne 0 ] || [ -z "$dl_size_total" ] || [ "$dl_size_total" -ne "$__arg3" ]; then
+				rm -rf "$DOWNLOAD_DIR" 2> /dev/null
 				let fault_code=9000+$E_DOWNLOAD_FAILURE
 				common_json_output_fault "" "$fault_code"
 			else
